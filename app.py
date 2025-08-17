@@ -16,6 +16,13 @@ except Exception:
 import streamlit.components.v1 as components
 from virtual_lab.agent import Agent
 from virtual_lab.run_meeting import run_meeting
+from advisors.prompts import (
+    PROMPT_GOAL_SUFFIX_LEAD,
+    PROMPT_GOAL_SUFFIX_MEMBER,
+    ACTIONABILITY_RULE,
+    ADVICE_RULE,
+)
+from advisors.services.meeting_fast import run_fast_completions
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -504,6 +511,10 @@ st.markdown(
     .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; background:#eef3ff; color:#2952ff; font-size: 12px; margin-right:8px; }
     .hero-title { font-size: 1.6rem; font-weight: 700; margin-bottom: 0.25rem; }
     .hero-subtitle { color: #6b7280; margin-top: 0; }
+    .chip { display:inline-block; padding:4px 10px; margin:2px 6px 2px 0; border-radius:999px; background:#1f2937; color:#e5e7eb; font-size:12px; }
+    .runbar { position:sticky; bottom:0; z-index:50; background:rgba(17,24,39,.85); backdrop-filter:saturate(180%) blur(8px); padding:10px 12px; border-top:1px solid #2b2f36; }
+    .skel { background:linear-gradient(90deg, #1f2937 25%, #374151 37%, #1f2937 63%); background-size:400% 100%; animation:sh 1.2s ease-in-out infinite; border-radius:8px; }
+    @keyframes sh { 0%{background-position:100% 0} 100%{background-position:0 0} }
     </style>
     """,
     unsafe_allow_html=True,
@@ -511,16 +522,16 @@ st.markdown(
 
 left_h, right_h = st.columns([3, 1])
 with left_h:
-    _current_category = st.session_state.get("advisor_category_main", list(CATEGORY_PRESETS.keys())[0])
-    _emoji = CATEGORY_EMOJI.get(_current_category, "🧠")
-    _subtitle = CATEGORY_SUBTITLE.get(_current_category, "Leader‑led expert panel tailored to the domain to deliver a clear, actionable plan.")
-    st.markdown(f"<div class='hero-title'>{_emoji} Advisors — {_current_category}</div>", unsafe_allow_html=True)
-    st.markdown(
-        f"<div class='hero-subtitle'>{_subtitle}</div>",
-        unsafe_allow_html=True,
-    )
+    # Advisor Category at top
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    selected_category = st.selectbox("Advisor Category", list(CATEGORY_PRESETS.keys()), index=0, key="advisor_category_main")
+    st.markdown("</div>", unsafe_allow_html=True)
+    _emoji = CATEGORY_EMOJI.get(selected_category, "🧠")
+    _subtitle = CATEGORY_SUBTITLE.get(selected_category, "Leader‑led expert panel tailored to the domain to deliver a clear, actionable plan.")
+    st.markdown(f"<div class='hero-title'>{_emoji} Advisors — {selected_category}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='hero-subtitle'>{_subtitle}</div>", unsafe_allow_html=True)
 with right_h:
-    st.markdown("<span class='badge'>Interactive</span><span class='badge'>Transparent</span><span class='badge'>Evidence‑aware</span>", unsafe_allow_html=True)
+    pass
 
 # Safety notice
 st.warning(
@@ -538,44 +549,21 @@ if "clarifying_answers" not in st.session_state:
 
 col_cfg, col_prev = st.columns([3, 2])
 with col_cfg:
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.subheader("Settings")
-    # Prefer Streamlit secrets if present, otherwise env (no manual input)
+    # Settings removed from UI; set defaults here
     _default_api_key = ""
     try:
         if "OPENAI_API_KEY" in st.secrets:
             _default_api_key = st.secrets["OPENAI_API_KEY"] or ""
     except Exception:
         _default_api_key = ""
-    _model_options = ["gpt-5", "gpt-5-nano"]
-    _default_idx = _model_options.index("gpt-5-nano") if "gpt-5-nano" in _model_options else 0
-    model = st.selectbox("Model", _model_options, index=_default_idx)
-    num_rounds = st.slider("Discussion Rounds", 1, 5, 2, 1)
-    web_search = st.checkbox("Enable Web Search", value=True)
-    if web_search:
-        st.caption("Web search provider: DuckDuckGo")
-    cache_outputs = st.checkbox("Cache outputs", value=True)
-    fast_path = st.checkbox("Fast path (Completions)", value=True)
-    user_tag = st.text_input("User Tag (optional)", value="")
-    st.caption("Sessions are auto-numbered (web_00001, web_00002, …) and only the latest 5 are kept.")
-    # Show effective models used by the app
-    st.caption(f"Clarifying questions use: {model}")
-    _assistants_model = ("gpt-4.1-nano" if (model or "").lower().startswith("gpt-5") else model)
-    st.caption(f"Team meeting (Assistants) mapped model: {_assistants_model}")
-    st.markdown("</div>", unsafe_allow_html=True)
-with col_prev:
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.subheader("Load Previous Session")
-    sessions_dir = BASE_DIR / "advisor_meetings"
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    old_dir = BASE_DIR / "medical_meetings"
-    existing = sorted(
-        {p.stem for p in sessions_dir.glob("*.md")} | {p.stem for p in sessions_dir.glob("*.json")} |
-        {p.stem for p in old_dir.glob("*.md")} | {p.stem for p in old_dir.glob("*.json")}
-    )
-    selected_session = st.selectbox("Select a session to view", [""] + existing, index=0)
-    load_btn = st.button("Load Session")
-    st.markdown("</div>", unsafe_allow_html=True)
+    model = "gpt-5-nano"
+    num_rounds = 1
+    web_search = True
+    cache_outputs = True
+    fast_path = True
+    user_tag = ""
+
+# Removed Load Previous Session UI per user request
 
 ## (captcha UI moved next to Run button)
 
@@ -729,32 +717,17 @@ CATEGORY_RULES: Dict[str, list[str]] = {
     ],
 }
 
+ 
+
 st.markdown("<div class='card'>", unsafe_allow_html=True)
-selected_category = st.selectbox("Advisor Category", list(CATEGORY_PRESETS.keys()), index=0, key="advisor_category_main")
+st.subheader("Case / Problem Description")
+agenda = st.text_area(
+    "Describe the case",
+    placeholder=CATEGORY_AGENDA_PLACEHOLDER.get(selected_category, "Describe your case..."),
+    height=160,
+    key=f"agenda_text_{selected_category}",
+)
 st.markdown("</div>", unsafe_allow_html=True)
-
-col_case, col_clarity = st.columns([3, 2], vertical_alignment="top")
-with col_case:
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.subheader("Case / Problem Description")
-    agenda = st.text_area(
-        "Describe the case",
-        placeholder=CATEGORY_AGENDA_PLACEHOLDER.get(selected_category, "Describe your case..."),
-        height=140,
-        key=f"agenda_text_{selected_category}",
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-with col_clarity:
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.subheader("Clarity Assistant")
-    st.caption("Let the AI ask clarifying questions if the case description is ambiguous or missing key details.")
-    col_ca1, col_ca2 = st.columns([1, 1])
-    with col_ca1:
-        suggest_btn = st.button("Suggest Questions")
-    with col_ca2:
-        max_q = st.slider("Max Qs", min_value=3, max_value=10, value=5)
-    st.markdown("</div>", unsafe_allow_html=True)
 
  
 
@@ -992,7 +965,7 @@ def run_meeting_cached(
     )
     return summary
 
-if suggest_btn:
+if False:
     # Basic per-user rate limit: 3 req/min
     if "session_id" not in st.session_state:
         st.session_state.session_id = secrets.token_hex(8)
@@ -1011,10 +984,7 @@ if suggest_btn:
         try:
             pbar = st.progress(0, text="Preparing to generate questions…")
             pbar.progress(50, text="Generating clarifying questions…")
-            if cache_outputs:
-                questions_list = generate_clarifying_questions(agenda, max_q, model, selected_category)
-            else:
-                questions_list = generate_clarifying_questions_nocache(agenda, max_q, model, selected_category)
+            questions_list = generate_clarifying_questions(agenda, 5, model, selected_category)
             st.session_state.clarifying_questions = questions_list
             # Initialize answer slots for new questions
             for q in questions_list:
@@ -1024,16 +994,8 @@ if suggest_btn:
         except Exception as e:
             st.exception(e)
 
-# Optional cache controls
-st.markdown("<div class='card'>", unsafe_allow_html=True)
-cl1, cl2 = st.columns([1, 5])
-with cl1:
-    if st.button("Clear prompt cache"):
-        generate_clarifying_questions.clear()
-        st.success("Prompt cache cleared.")
-with cl2:
-    st.caption("Utilities")
-st.markdown("</div>", unsafe_allow_html=True)
+# Advanced settings expander
+# Removed Advanced settings expander
 
 if st.session_state.clarifying_questions:
     with st.expander("Clarifying Questions (answer to improve precision)", expanded=True):
@@ -1042,47 +1004,50 @@ if st.session_state.clarifying_questions:
 
 ## Removed Agenda Questions and Rules sections from UI; defaults applied per category when running.
 
-st.markdown("<div class='card'>", unsafe_allow_html=True)
 st.subheader("Advisors — Team Setup")
 
 # Load category preset
 _preset = CATEGORY_PRESETS[selected_category]
 
-# Team lead inputs
-lead_title = st.text_input(
-    "Team Lead Title",
-    value=_preset["lead"]["title"],
-    key=f"lead_title_{selected_category}",
-)
-lead_expertise = st.text_input(
-    "Team Lead Expertise",
-    value=_preset["lead"]["expertise"],
-    key=f"lead_expertise_{selected_category}",
-)
+# Role chips (compact)
+st.markdown(" ".join([f"<span class='chip'>{m['title']}</span>" for m in _preset["members"]]), unsafe_allow_html=True)
 
-# Dynamic member inputs
-member_titles: List[str] = []
-member_expertises: List[str] = []
-for idx, m in enumerate(_preset["members"]):
-    c1, c2 = st.columns(2)
-    with c1:
-        member_titles.append(
-            st.text_input(
-                f"Member {idx + 1} Title",
-                value=m["title"],
-                key=f"m{idx}_title_{selected_category}",
+# Editable team inside expander
+with st.expander("Edit team", expanded=False):
+    # Team lead inputs
+    lead_title = st.text_input(
+        "Team Lead Title",
+        value=_preset["lead"]["title"],
+        key=f"lead_title_{selected_category}",
+    )
+    lead_expertise = st.text_input(
+        "Team Lead Expertise",
+        value=_preset["lead"]["expertise"],
+        key=f"lead_expertise_{selected_category}",
+    )
+    # Dynamic member inputs
+    member_titles: List[str] = []
+    member_expertises: List[str] = []
+    for idx, m in enumerate(_preset["members"]):
+        c1, c2 = st.columns(2)
+        with c1:
+            member_titles.append(
+                st.text_input(
+                    f"Member {idx + 1} Title",
+                    value=m["title"],
+                    key=f"m{idx}_title_{selected_category}",
+                )
             )
-        )
-    with c2:
-        member_expertises.append(
-            st.text_input(
-                f"Member {idx + 1} Expertise",
-                value=m["expertise"],
-                key=f"m{idx}_exp_{selected_category}",
+        with c2:
+            member_expertises.append(
+                st.text_input(
+                    f"Member {idx + 1} Expertise",
+                    value=m["expertise"],
+                    key=f"m{idx}_exp_{selected_category}",
+                )
             )
-        )
 
-# Inline CAPTCHA then Run button (vertical)
+# Inline CAPTCHA (above button)
 if "captcha_sum" not in st.session_state:
     a, b = random.randint(1, 9), random.randint(1, 9)
     st.session_state.captcha_q = f"What is {a} + {b}?"
@@ -1099,12 +1064,27 @@ if st.button("Verify", key="captcha_verify_btn_main"):
             st.error("Try again")
     except Exception:
         st.error("Enter a number")
-run_btn = st.button(
-    "Run Advisors",
-    type="primary",
-    disabled=not bool(st.session_state.get("captcha_ok", False)),
-)
+
+# Sticky run bar
+st.markdown("<div class='runbar'>", unsafe_allow_html=True)
+run_btn = st.button("Run Advisors", type="primary", use_container_width=True,
+                    disabled=not bool(st.session_state.get("captcha_ok", False)))
 st.markdown("</div>", unsafe_allow_html=True)
+
+# Keyboard shortcut (Cmd/Ctrl+Enter)
+components.html(
+    """
+    <script>
+    document.addEventListener('keydown', function(e){
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        const btns = parent.document.querySelectorAll('button[kind=\"primary\"]');
+        if (btns && btns.length) btns[btns.length-1].click();
+      }
+    });
+    </script>
+    """,
+    height=0,
+)
 
 output_container = st.container()
 
@@ -1393,7 +1373,3 @@ if run_btn:
                         st.info("Messages (.json) not found.")
             except Exception as e:
                 st.exception(e)
-
-# Load previously saved session without rerun
-if load_btn and selected_session:
-    render_session_artifacts(selected_session)
