@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.streamlit/secrets.toml
+advisor_meetings/
+medical_meetings/
+*.log
+.git.bak*/
