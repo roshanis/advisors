@@ -2,11 +2,12 @@ import os
 import random
 import time
 import secrets
+import concurrent.futures
 from collections import defaultdict, deque
 from pathlib import Path
 import streamlit as st
 import json
-from typing import List, Dict
+from typing import List, Dict, Tuple
 from openai import OpenAI
 try:
     from duckduckgo_search import DDGS  # type: ignore
@@ -535,37 +536,38 @@ if "clarifying_questions" not in st.session_state:
 if "clarifying_answers" not in st.session_state:
     st.session_state.clarifying_answers = {}
 
-with st.sidebar:
+col_cfg, col_prev = st.columns([3, 2])
+with col_cfg:
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.subheader("Settings")
     # Prefer Streamlit secrets if present, otherwise env (no manual input)
-    # Only look in Streamlit secrets (ignore .env and process env)
     _default_api_key = ""
     try:
         if "OPENAI_API_KEY" in st.secrets:
             _default_api_key = st.secrets["OPENAI_API_KEY"] or ""
     except Exception:
         _default_api_key = ""
-    num_rounds = st.slider("Discussion Rounds", 1, 5, 2, 1)
-    pubmed = st.checkbox("Enable PubMed Search", value=False)
-    web_search = st.checkbox("Enable Web Search", value=True)
-    if web_search:
-        st.caption("Web search provider: DuckDuckGo")
     _model_options = ["gpt-5", "gpt-5-nano"]
     _default_idx = _model_options.index("gpt-5-nano") if "gpt-5-nano" in _model_options else 0
     model = st.selectbox("Model", _model_options, index=_default_idx)
+    num_rounds = st.slider("Discussion Rounds", 1, 5, 2, 1)
+    web_search = st.checkbox("Enable Web Search", value=True)
+    if web_search:
+        st.caption("Web search provider: DuckDuckGo")
     cache_outputs = st.checkbox("Cache outputs", value=True)
+    fast_path = st.checkbox("Fast path (Completions)", value=True)
     user_tag = st.text_input("User Tag (optional)", value="")
     st.caption("Sessions are auto-numbered (web_00001, web_00002, …) and only the latest 5 are kept.")
     # Show effective models used by the app
     st.caption(f"Clarifying questions use: {model}")
     _assistants_model = ("gpt-4.1-nano" if (model or "").lower().startswith("gpt-5") else model)
     st.caption(f"Team meeting (Assistants) mapped model: {_assistants_model}")
-    
-    # Loader for previous sessions
-    st.markdown("---")
+    st.markdown("</div>", unsafe_allow_html=True)
+with col_prev:
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.subheader("Load Previous Session")
     sessions_dir = BASE_DIR / "advisor_meetings"
     sessions_dir.mkdir(parents=True, exist_ok=True)
-    # include old medical_meetings for backward compatibility
     old_dir = BASE_DIR / "medical_meetings"
     existing = sorted(
         {p.stem for p in sessions_dir.glob("*.md")} | {p.stem for p in sessions_dir.glob("*.json")} |
@@ -573,6 +575,7 @@ with st.sidebar:
     )
     selected_session = st.selectbox("Select a session to view", [""] + existing, index=0)
     load_btn = st.button("Load Session")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 ## (captcha UI moved next to Run button)
 
@@ -839,6 +842,71 @@ def generate_clarifying_questions_nocache(case_text: str, max_questions: int, mo
     return uniq[:max_questions]
 
 
+def _chat(model_name: str, system: str, user: str) -> str:
+    client = OpenAI()
+    resp = client.chat.completions.create(
+        model=model_name,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+    return resp.choices[0].message.content if resp.choices else ""
+
+
+def run_fast_completions(
+    agenda: str,
+    contexts: Tuple[str, ...],
+    lead_spec: Dict[str, str],
+    member_specs: Tuple[Dict[str, str], ...],
+    model_name: str,
+    num_rounds: int = 1,
+) -> str:
+    # One parallel round of member advice, then a lead synthesis
+    context_block = "\n\n".join(contexts) if contexts else ""
+
+    def member_prompt(m: Dict[str, str]) -> Tuple[str, str]:
+        system = (
+            f"You are {m['title']}. Expertise: {m['expertise']}. Goal: {m['goal']}. "
+            f"{ADVICE_RULE} {ACTIONABILITY_RULE}"
+        )
+        user = (
+            f"Agenda:\n{agenda}\n\n"
+            + (f"Context:\n{context_block}\n\n" if context_block else "")
+            + "Provide your actionable advice now. Be concise."
+        )
+        return system, user
+
+    # Run members in parallel
+    member_outputs: List[str] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(member_specs) or 1)) as pool:
+        futures = []
+        for m in member_specs:
+            sys, usr = member_prompt(m)
+            futures.append(pool.submit(_chat, model_name, sys, usr))
+        for fut in futures:
+            try:
+                member_outputs.append(fut.result() or "")
+            except Exception:
+                member_outputs.append("")
+
+    # Lead synthesis
+    lead_system = (
+        f"You are {lead_spec['title']}. Expertise: {lead_spec['expertise']}. Goal: {lead_spec['goal']}. "
+        f"{ACTIONABILITY_RULE}"
+    )
+    members_block = "\n\n".join(
+        f"[member {i+1}]\n{out}" for i, out in enumerate(member_outputs) if out.strip()
+    )
+    lead_user = (
+        f"Agenda:\n{agenda}\n\n"
+        + (f"Context:\n{context_block}\n\n" if context_block else "")
+        + (f"Team member advice:\n{members_block}\n\n" if members_block else "")
+        + "Produce the final consensus in markdown."
+    )
+    summary_md = _chat(model_name, lead_system, lead_user)
+    return summary_md or "(No summary generated)"
+
 def build_web_context(category: str, agenda_text: str) -> str:
     """Fetch brief web highlights (free DuckDuckGo) for the agenda and category to prime advisors."""
     if DDGS is None:
@@ -892,7 +960,9 @@ def run_meeting_cached(
     save_dir = BASE_DIR / "advisor_meetings"
     save_dir.mkdir(parents=True, exist_ok=True)
     team_lead = _deserialize_agent(team_lead_data)
-    team_members = tuple(_deserialize_agent(d) for d in team_members_data)
+    # Parallelize deserialization of members
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(team_members_data) or 1)) as pool:
+        team_members = tuple(pool.map(_deserialize_agent, team_members_data))
 
     # Map gpt-5* selections to an Assistants-supported model
     def to_assistants_model(name: str) -> str:
@@ -955,10 +1025,15 @@ if suggest_btn:
             st.exception(e)
 
 # Optional cache controls
-with st.sidebar:
+st.markdown("<div class='card'>", unsafe_allow_html=True)
+cl1, cl2 = st.columns([1, 5])
+with cl1:
     if st.button("Clear prompt cache"):
         generate_clarifying_questions.clear()
         st.success("Prompt cache cleared.")
+with cl2:
+    st.caption("Utilities")
+st.markdown("</div>", unsafe_allow_html=True)
 
 if st.session_state.clarifying_questions:
     with st.expander("Clarifying Questions (answer to improve precision)", expanded=True):
@@ -1193,33 +1268,51 @@ if run_btn:
             role=_preset["lead"]["role"],
             model=model,
         )
-        # Build members from dynamic inputs while preserving preset goals/roles
-        team_members_list = []
-        for i, m in enumerate(_preset["members"]):
+        # Build members from dynamic inputs while preserving preset goals/roles (parallelized)
+        def _make_member(i: int, m: Dict[str, str]) -> Agent:
             title_i = member_titles[i] if i < len(member_titles) else m["title"]
             exp_i = member_expertises[i] if i < len(member_expertises) else m["expertise"]
-            team_members_list.append(
-                Agent(
-                    title=title_i,
-                    expertise=exp_i,
-                    goal=m["goal"] + PROMPT_GOAL_SUFFIX_MEMBER,
-                    role=m["role"],
-                    model=model,
-                )
+            return Agent(
+                title=title_i,
+                expertise=exp_i,
+                goal=m["goal"] + PROMPT_GOAL_SUFFIX_MEMBER,
+                role=m["role"],
+                model=model,
             )
-        team_members = tuple(team_members_list)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(_preset["members"]) or 1)) as pool:
+            team_members = tuple(pool.map(lambda idx_m: _make_member(idx_m[0], idx_m[1]), enumerate(_preset["members"])))
         agenda_qs = tuple(CATEGORY_QUESTIONS[selected_category])
         agenda_rules = tuple(list(CATEGORY_RULES[selected_category]) + [ACTIONABILITY_RULE, ADVICE_RULE])
         save_dir = BASE_DIR / "advisor_meetings"
         save_dir.mkdir(parents=True, exist_ok=True)
-        with st.spinner("Running team meeting... this may take a few minutes"):
+        with st.spinner("Running advisors... this may take a few minutes"):
             try:
                 # Auto-number session name and prune to keep the latest 5 web_* sessions
                 auto_save_name = _make_next_web_session_name(save_dir)
                 step = st.empty()
                 bar = st.progress(0, text="Configuring advisors…")
                 bar.progress(20, text="Assembling agenda and rules…")
-                if cache_outputs:
+                if fast_path:
+                    bar.progress(40, text="Starting fast path (Completions)…")
+                    # Build lead/member specs for fast path
+                    lead_spec = {
+                        "title": team_lead.title,
+                        "expertise": team_lead.expertise,
+                        "goal": team_lead.goal,
+                    }
+                    member_specs = tuple(
+                        {"title": m.title, "expertise": m.expertise, "goal": m.goal, "role": m.role}
+                        for m in team_members
+                    )
+                    summary = run_fast_completions(
+                        agenda=agenda,
+                        contexts=tuple(x for x in (clarifications_text, web_context_text) if x),
+                        lead_spec=lead_spec,
+                        member_specs=member_specs,
+                        model_name=model,
+                        num_rounds=int(num_rounds),
+                    )
+                elif cache_outputs:
                     bar.progress(40, text="Starting cached team meeting…")
                     summary = run_meeting_cached(
                         agenda=agenda,
@@ -1227,7 +1320,7 @@ if run_btn:
                         agenda_rules=agenda_rules,
                         contexts=tuple(x for x in (clarifications_text, web_context_text) if x),
                         num_rounds=st.session_state.get("num_rounds_override", None) or int(num_rounds),
-                        pubmed_search=bool(pubmed),
+                        pubmed_search=False,
                         team_lead_data=_serialize_agent(team_lead),
                         team_members_data=tuple(_serialize_agent(m) for m in team_members),
                         save_name=auto_save_name,
@@ -1256,7 +1349,7 @@ if run_btn:
                         contexts=tuple(x for x in (clarifications_text, web_context_text) if x),
                         num_rounds=st.session_state.get("num_rounds_override", None) or int(num_rounds),
                         temperature=1.0,
-                        pubmed_search=bool(pubmed),
+                        pubmed_search=False,
                         return_summary=True,
                     )
                 bar.progress(80, text="Summarizing consensus…")

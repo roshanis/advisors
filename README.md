@@ -71,10 +71,12 @@ uv run streamlit run app.py
 7) Saved artifacts: `advisor_meetings/<session>.md` and `<session>.json`
 
 ## Configuration Tips
-- Models: select per‑agent model in UI (e.g., gpt‑4o, gpt‑4o‑mini)
-- Temperature: 0.1–0.3 for consistent consensus
-- Rounds: increase for deeper discussion
-- PubMed: toggle in sidebar to include literature search
+- Models: Clarifying questions use your selection (e.g., gpt‑5‑nano). Team meeting uses GPT‑4.1‑nano when a gpt‑5* model is selected (Assistants requirement).
+- Fast mode: Toggle on to use 1 round and smaller specialist models for lower latency/cost.
+- Web search: DuckDuckGo summaries are on by default. Disable for fully offline runs.
+- Caching: Use the “Cache outputs” toggle to reuse recent results; turn off when iterating prompts.
+- Actionability: Recommendations are enforced to be short, numbered action plans with owners, deadlines, steps, tools, metrics, risks.
+- Safety: Web highlights are rendered safely (no HTML). Secrets should live in `./.streamlit/secrets.toml` only.
 
 ## CLI Example
 ```bash
