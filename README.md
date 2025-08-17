@@ -1,6 +1,6 @@
-# Multi‑Advisor Team Consensus
+# Advisors
 
-An AI‑assisted, multi‑agent team meeting app that coordinates domain specialists (e.g., medical, entrepreneurship, NFL fantasy, personal finance, legal, software, design, marketing, research, careers) to produce a clear, evidence‑aware plan. 
+Advisors is an AI‑assisted, multi‑agent app that coordinates domain specialists (entrepreneurship, NFL fantasy, personal finance, legal, software, design, marketing, research, careers, fashion) to produce a clear, actionable plan.
 
 
 ## Features
@@ -61,14 +61,14 @@ uv run streamlit run app.py
 # open http://localhost:8501
 ```
 
-## Using the UI
+## Using Advisors
 1) Choose an Advisor Category (top of the main panel)
 2) Describe your case/problem in “Case Description (Agenda)”
 3) Optionally click “Suggest Questions” and answer clarifiers
 4) Review/adjust “Agenda Questions” and “Rules/Guardrails” (auto‑filled per category)
 5) Review the prefilled team (leader + specialists) and edit titles/expertise if desired
-6) Click “Run Team Meeting”, then review tabs: Consensus Summary, Transcript, Raw JSON
-7) Saved artifacts: `medical_meetings/<session>.md` and `<session>.json`
+6) Click “Run Advisors”, then review tabs: Consensus Summary, Transcript, Raw JSON
+7) Saved artifacts: `advisor_meetings/<session>.md` and `<session>.json`
 
 ## Configuration Tips
 - Models: select per‑agent model in UI (e.g., gpt‑4o, gpt‑4o‑mini)

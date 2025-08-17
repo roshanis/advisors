@@ -432,13 +432,20 @@ PROMPT_GOAL_SUFFIX_LEAD = (
 )
 PROMPT_GOAL_SUFFIX_MEMBER = (
     " Provide concrete, verifiable details; quantify where possible; explicitly state uncertainty; "
-    "cite sources when literature/search is enabled."
+    "cite sources when literature/search is enabled. Focus on advising, not just critiquing: "
+    "propose specific actions with rationale, offer alternatives and tradeoffs, and suggest next steps."
 )
 
 # Additional guardrail to ensure actionable outputs
 ACTIONABILITY_RULE = (
     "Recommendation must be a numbered action plan (3–7 items). For each action, specify: Action, Owner, "
     "Deadline, Steps, Tools/Resources, Success Metric, Risk & Mitigation. Avoid vague language."
+)
+
+# Guardrail to ensure advisors provide advice, not only critique
+ADVICE_RULE = (
+    "Advisors must provide actionable advice (specific actions and why), not just critique. "
+    "Include at least one concrete recommended action and an alternative with tradeoffs, when applicable."
 )
 
 # ---- Lightweight rate limiter (in‑memory, per session/user) ----
@@ -485,7 +492,7 @@ CATEGORY_SUBTITLE = {
     "Fashion": "Creative director leading trend, design, merchandising, ops, and brand to deliver a cohesive collection.",
 }
 
-st.set_page_config(page_title="Multi‑Advisor Team Consensus", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Advisors", page_icon="🧠", layout="wide")
 st.markdown(
     """
     <style>
@@ -506,7 +513,7 @@ with left_h:
     _current_category = st.session_state.get("advisor_category_main", list(CATEGORY_PRESETS.keys())[0])
     _emoji = CATEGORY_EMOJI.get(_current_category, "🧠")
     _subtitle = CATEGORY_SUBTITLE.get(_current_category, "Leader‑led expert panel tailored to the domain to deliver a clear, actionable plan.")
-    st.markdown(f"<div class='hero-title'>{_emoji} {_current_category} Advisors</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='hero-title'>{_emoji} Advisors — {_current_category}</div>", unsafe_allow_html=True)
     st.markdown(
         f"<div class='hero-subtitle'>{_subtitle}</div>",
         unsafe_allow_html=True,
@@ -961,7 +968,7 @@ if st.session_state.clarifying_questions:
 ## Removed Agenda Questions and Rules sections from UI; defaults applied per category when running.
 
 st.markdown("<div class='card'>", unsafe_allow_html=True)
-st.subheader("Advisors")
+st.subheader("Advisors — Team Setup")
 
 # Load category preset
 _preset = CATEGORY_PRESETS[selected_category]
@@ -1018,7 +1025,7 @@ if st.button("Verify", key="captcha_verify_btn_main"):
     except Exception:
         st.error("Enter a number")
 run_btn = st.button(
-    "Run Team Meeting",
+    "Run Advisors",
     type="primary",
     disabled=not bool(st.session_state.get("captcha_ok", False)),
 )
@@ -1202,7 +1209,7 @@ if run_btn:
             )
         team_members = tuple(team_members_list)
         agenda_qs = tuple(CATEGORY_QUESTIONS[selected_category])
-        agenda_rules = tuple(list(CATEGORY_RULES[selected_category]) + [ACTIONABILITY_RULE])
+        agenda_rules = tuple(list(CATEGORY_RULES[selected_category]) + [ACTIONABILITY_RULE, ADVICE_RULE])
         save_dir = BASE_DIR / "advisor_meetings"
         save_dir.mkdir(parents=True, exist_ok=True)
         with st.spinner("Running team meeting... this may take a few minutes"):
